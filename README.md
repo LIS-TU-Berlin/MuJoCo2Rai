@@ -8,14 +8,23 @@ A Python tool for converting MuJoCo XML files—including joints, meshes, and te
 - Supports textures and vertex-wise coloring.  
 - Outputs ready-to-use `.g` files for RAI.  
 
-## Usage  
+## Example Usage 
 
-1. **Download the RoboCasa Dataset** (if working with RoboCasa fixtures).  
-2. Place the `fixture` directory inside this repository.  
+
+
+1. **Download the RoboCasa fixture dataset Dataset** (if working with RoboCasa fixtures).  
+
+        wget -O fixtures.zip https://utexas.box.com/shared/static/pobhbsjyacahg2mx8x4rm5fkz3wlmyzp.zip
+
+2. Unzip the `fixture` directory inside this repository. 
+       
+        unzip fixtures.zip -d ./
+
+
 3. Run the conversion script:  
 
-   ```bash
-   python3 robocasa2rai.py
-   ```  
+   
+        cd MuJoCo2Rai; python3 robocasa2rai.py
+   
 
 This will generate jointed RAI `.g` files in the correct format.
