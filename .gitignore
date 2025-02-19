@@ -1,0 +1,7 @@
+__pycache__/
+aigen_objs/
+fixtures/
+rai_plys/
+rai_jointed/
+
+z.log.global
