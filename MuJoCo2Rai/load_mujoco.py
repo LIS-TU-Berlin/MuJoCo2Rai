@@ -55,15 +55,15 @@ class MujocoLoader():
 
         self.materials = {}
         self.textures = {}
-        self.models = {}
-        self.load_meshes(root, path)
+        self.meshes = {}
+        self.load_assets(root, path)
         self.bodyCount = -1
 
         self.C = ry.Config()
         self.base = self.C.addFrame('base')
         self.add_node(root, self.base, path, 0)
 
-    def load_meshes(self, root, path):
+    def load_assets(self, root, path):
         texs = root.findall(".//texture")
         for tex in texs:
             name = tex.attrib.get("name", "")
@@ -79,13 +79,13 @@ class MujocoLoader():
             else:
                 self.materials[name] = ""
 
-        meshes = root.findall(".//mesh")
-        for mesh in meshes:
+        for mesh in root.findall(".//mesh"):
             name = mesh.attrib.get("name", "")
             file = mesh.attrib.get("file", "")
             if file.startswith('visual') or file.startswith('collision'): #HACK: the true path is hidden in some compiler attribute
                 file = 'meshes/'+file
-            self.models[name] = os.path.join(path, file)
+            mesh.attrib['file'] = os.path.join(path, file)
+            self.meshes[name] = mesh.attrib
     
     def add_node(self, node, f_parent, path, level):
         if 'file' in node.attrib:
@@ -104,7 +104,7 @@ class MujocoLoader():
             tree = ET.parse(file)
             root = tree.getroot()
             path, _ = os.path.split(file)
-            self.load_meshes(root, path)
+            self.load_assets(root, path)
             self.add_node(root, f_parent, path, level+1)
 
         for child in node:
@@ -121,51 +121,16 @@ class MujocoLoader():
 
         f_body = self.C.addFrame(body_name)
         f_body.setParent(f_parent)
-        self.setRelativePose(f_body, node)
+        self.setRelativePose(f_body, node.attrib)
 
-        for i, geom in enumerate(node.findall("./geom")):
-            # print('GEOM', i, geom.attrib)
-            if 'mesh' in geom.attrib:
-                mesh = geom.attrib.get("mesh", "")
-                # material_name = geom.attrib.get("material", "")
-
-                meshfile = self.models[mesh] #os.path.join(path, self.models[mesh_name])
-                # print('MESH', meshfile)
-                f_shape = self.C.addFrame(f'{body_name}_shape{i}') \
-                    .setParent(f_body) \
-                    .setMeshFile(meshfile)
-                self.setRelativePose(f_shape, geom)
-            
-            elif 'type' in geom.attrib:
-                size = floats(geom.attrib['size'])
-                f_shape = self.C.addFrame(f'{body_name}_shape{i}') \
-                    .setParent(f_body)
-                self.setRelativePose(f_shape, geom)
-                if geom.attrib['type']=='capsule':
-                    if len(size)==2:
-                        f_shape.setShape(ry.ST.capsule, [2.*size[1], size[0]])
-                if geom.attrib['type']=='cylinder':
-                    if len(size)==2:
-                        f_shape.setShape(ry.ST.cylinder, [2.*size[1], size[0]])
-                if geom.attrib['type']=='box':
-                    assert len(size)==3
-                    f_shape.setShape(ry.ST.box, [2.*f for f in size])
-                        
-                if geom.attrib['type']=='sphere':
-                    if len(size)==1:
-                        f_shape.setShape(ry.ST.sphere, size)
-            if geom.attrib.get('class', None) and 'col' in geom.attrib['class']:
-                f_shape.setColor([1,0,0,.2])
-                
         joints = node.findall("./joint")
-        if joints:
-            assert len(joints)==1
-            axis = joints[0].attrib.get("axis", None)
-            limits = joints[0].attrib.get("range", None)
-            origin_name = f"{body_name}_origin"
-            f_origin = self.C.addFrame(origin_name)
+        for jointCount,joint in enumerate(joints):
+            # assert len(joints)==1
+            axis = joint.attrib.get("axis", None)
+            limits = joint.attrib.get("range", None)
+            f_origin = self.C.addFrame(f"{body_name}_origin{jointCount*'_'}")
             f_origin.setParent(f_body)
-            self.setRelativePose(f_origin, joints[0])
+            self.setRelativePose(f_origin, joint.attrib)
             f_origin.unLink()
             f_origin.setParent(f_parent, True)
 
@@ -184,7 +149,7 @@ class MujocoLoader():
             else:
                 axis = ry.JT.hingeZ
 
-            if joints[0].attrib.get('type', 'hinge')=='slide':
+            if joint.attrib.get('type', 'hinge')=='slide':
                 trans_map = {
                     ry.JT.hingeX: ry.JT.transX,
                     ry.JT.hingeY: ry.JT.transY,
@@ -194,28 +159,111 @@ class MujocoLoader():
             if not limits:
                 limits = "-1 1"
 
-            f_joint = self.C.addFrame(f"{body_name}_joint") \
+            f_joint = self.C.addFrame(f"{body_name}_joint{jointCount*'_'}") \
                 .setParent(f_origin) \
                 .setJoint(axis, floats(limits))
-            # lines.append(f"""{body_name}_joint ({pre}) {{joint: {rai_joint}, ctrl_limits: [{joint_limits}, 12]}}\n""")
-            # lines.append(f"""{body_name} ({body_name}_joint) {{Q: "t({invert_floats(joint_pos)})"}}\n""")
+            
+            # relink things:
+            f_parent = f_joint
             f_body.unLink()
-            f_body.setParent(f_joint, False)
-            # if joint_pos:
-                # f_body.setRelativePosition(invert_floats(joint_pos))
+            f_body.setParent(f_parent, True)
+
+        for i, geom in enumerate(node.findall("./geom")):
+            # print('GEOM', i, geom.attrib)
+            if 'mesh' in geom.attrib:
+                mesh = geom.attrib.get("mesh", "")
+                # material_name = geom.attrib.get("material", "")
+
+                meshfile = self.meshes[mesh]['file'] #os.path.join(path, self.models[mesh_name])
+                scale = floats(self.meshes[mesh].get('scale', '1 1 1'))
+                # print('MESH', meshfile)
+                f_shape = self.C.addFrame(f'{body_name}_shape{i}') \
+                    .setParent(f_body) \
+                    .setMeshFile(meshfile, scale[0])
+                self.setRelativePose(f_shape, geom.attrib)
+            
+            elif 'type' in geom.attrib:
+                size = floats(geom.attrib['size'])
+                f_shape = self.C.addFrame(f'{body_name}_shape{i}') \
+                    .setParent(f_body)
+                self.setRelativePose(f_shape, geom.attrib)
+                if geom.attrib['type']=='capsule':
+                    if len(size)==2:
+                        f_shape.setShape(ry.ST.capsule, [2.*size[1], size[0]])
+                if geom.attrib['type']=='cylinder':
+                    if len(size)==2:
+                        f_shape.setShape(ry.ST.cylinder, [2.*size[1], size[0]])
+                if geom.attrib['type']=='box':
+                    assert len(size)==3
+                    f_shape.setShape(ry.ST.box, [2.*f for f in size])
+                        
+                if geom.attrib['type']=='sphere':
+                    if len(size)==1:
+                        f_shape.setShape(ry.ST.sphere, size)
+                
+                f_shape.setColor([.3, .3, .3, .3])
+
+            if geom.attrib.get('class', None) and 'col' in geom.attrib['class']:
+                f_shape.setColor([1,0,0,.2])
+                
         return f_body
 
-    def setRelativePose(self, f, node):
-        pos = node.attrib.get('pos', None)
+    def setRelativePose(self, f, attrib):
+        pos = attrib.get('pos', None)
         if pos:
             f.setRelativePosition(floats(pos))
         
-        quat = node.attrib.get('quat', None)
+        quat = attrib.get('quat', None)
         if quat:
             f.setRelativeQuaternion(floats(quat))
         
-        rpy = node.attrib.get('euler', None)
+        rpy = attrib.get('euler', None)
         if rpy:
             q = ry.Quaternion()
             q.setRollPitchYaw(floats(rpy))
             f.setRelativeQuaternion(q.getArr())
+
+class Mujoco2Dict():
+
+    def __init__(self, file):
+        tree = ET.parse(file)
+        path, _ = os.path.split(file)
+        root = tree.getroot()
+
+        self.excludeTags = ['compiler', 'mujocoinclude', 'default', 'asset', 'include', 'key', 'site', 'worldbody', 'global', 'quality', 'map', 'camera']
+
+        self.D = OrderedDict()
+        self.D['base'] = {}
+        self.add_node(root, 'base', path, 0)
+
+    def add_node(self, node, parent: str, path, level):
+        if 'file' in node.attrib:
+            file = node.attrib['file'] 
+            node.attrib['file'] = os.path.join(path, file)
+
+        print('|'+level*'  ', node.tag, node.attrib)
+
+        if node.tag in self.excludeTags:
+            name = parent
+            # if node.tag != 'mujocoinclude' and len(list(node)):
+                # print(f'************** WARNING: removed element {node.tag}: {node.attrib} has children')
+        else:
+            name = node.attrib.get('name', None)
+            if not name:
+                name = f'{len(self.D)}'
+            else:
+                del node.attrib['name']
+                if name in self.D:
+                    print(f'WARNING: non=unique name "{name}" -> "{name}_{len(self.D)}"')
+                    name = f'{name}_{len(self.D)}'
+            self.D[name] = { 'parent': parent, 'tag': node.tag } | node.attrib
+
+        if node.tag == 'include':
+            file = node.attrib['file'] 
+            tree = ET.parse(file)
+            root = tree.getroot()
+            path, _ = os.path.split(file)
+            self.add_node(root, parent, path, level+1)
+
+        for child in node:
+            self.add_node(child, name, path, level+1)

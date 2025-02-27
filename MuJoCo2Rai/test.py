@@ -17,10 +17,18 @@ def test_fixtures():
 def test_kitchen_franka():
     pysite = sysconfig.get_paths()["purelib"]
     file = pysite+"/gymnasium_robotics/envs/assets/kitchen_franka/kitchen_assets/kitchen_env_model.xml"
+    file = '../kitchen_dataset/RUSTIC_ONE_WALL_SMALL.xml'
     print('=====================', file)
+    # M = Mujoco2Dict(file)
+    # for key, value in M.D.items():
+    #     print(f'{key}: {value}')
+    #print(yaml.dump(M.D))#, default_flow_style=True))
+    # return
     M = MujocoLoader(file)
+    M.base.setQuaternion([0,0,0,1])
+    M.base.setPosition([3,0,0])
     # print('loaded frames: ', M.C.getFrameNames())
-    for i in range(2):
+    for i in range(1):
         M.C.view(True)
         M.C.animate()
 
