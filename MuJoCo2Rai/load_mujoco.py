@@ -2,7 +2,10 @@ import os
 import robotic as ry
 import xml.etree.ElementTree as ET
 import numpy as np
+import trimesh
+from PIL import Image
 from copy import copy
+from mesh_helper import *
 
 from collections import OrderedDict
 
@@ -17,9 +20,6 @@ muj2rai_joint_map = {
 
 def floats(input_string):
     return [float(num) for num in input_string.replace(',', ' ').split()]
-
-def invert_floats(input_string):
-    return [-float(num) for num in input_string.replace(',', ' ').split()]
 
 ## --- basic structure to parse through xml with includes:
 
@@ -46,9 +46,90 @@ def print_xml(file):
 
 ## --- same with building the condig:
 
+def obj2ply(meshfile: str, ply_out: str, scale: float=1.0, texture_path: str="none") -> bool:
+
+    tri_obj = trimesh.load(meshfile)
+    if hasattr(tri_obj.visual, 'to_color'):
+
+        if texture_path == "none":
+            vertex_colors_visual = tri_obj.visual.to_color()
+            tri_obj.visual = vertex_colors_visual
+        elif texture_path:
+            try:
+                texture_image = Image.open(texture_path)
+                
+                texture = trimesh.visual.TextureVisuals(image=texture_image, uv=tri_obj.visual.uv)
+                tri_obj.visual = texture
+    
+                
+                texture = Image.open(texture_path)
+                texture = np.array(texture).astype(float) / 255.0
+                
+                if texture.shape[-1] == 3:
+                    alpha = np.ones((texture.shape[0], texture.shape[1], 1))
+                    texture = np.concatenate([texture, alpha], axis=-1)
+                
+                if not hasattr(tri_obj.visual, 'uv'):
+                    raise ValueError("Mesh does not have UV coordinates!")
+                
+                uv_coords = tri_obj.visual.uv
+                
+                uv_coords_copy = uv_coords.copy()
+                uv_coords_copy[:, 1] = 1 - uv_coords_copy[:, 1]
+                
+                pixel_coords = np.zeros_like(uv_coords_copy)
+                pixel_coords[:, 0] = uv_coords_copy[:, 0] * (texture.shape[1] - 1)
+                pixel_coords[:, 1] = uv_coords_copy[:, 1] * (texture.shape[0] - 1)
+                pixel_coords = pixel_coords.astype(int)
+                
+                vertex_colors = texture[pixel_coords[:, 1], pixel_coords[:, 0]]
+                
+                tri_obj.visual = trimesh.visual.ColorVisuals(
+                    mesh=tri_obj,
+                    vertex_colors=vertex_colors
+                )
+                
+                
+            except:
+                print(texture_path, "is not a path to a texture or could not been applied vertex wise to the mesh.")
+        if scale != 1.0:
+            print(scale)
+            scaling_mat = scale * np.eye(4)
+            scaling_mat[-1, -1] = 1.0
+            tri_obj.apply_transform(scaling_mat)
+
+        tri_obj.export('tmp.ply')
+        print(f"Converted {meshfile}")
+        
+        M = MeshHelper('tmp.ply')
+        # transform_mat = M.transformInertia()
+        # M.createPoints()
+        # M.createDecomposition()
+        M.export_h5(ply_out, True)
+        return True
+        
+    else:
+        print(f"Failed on {meshfile}")
+        return False
+
+def processMesh(name: str, meshfile: str, texturefile: str, out_path: str, scaling: float=1.0) -> str:
+
+    meshfile = os.path.join(meshfile)
+    texturefile = os.path.join(texturefile)
+    newmeshfile = os.path.join(out_path, f"{name}.mesh.h5")
+
+    ply_success = obj2ply(meshfile, newmeshfile, texture_path=texturefile, scale=scaling)
+    if ply_success:
+        return newmeshfile
+    return None
+
+## 
 class MujocoLoader():
 
-    def __init__(self, file):
+    def __init__(self, file, visualsOnly=True, processMeshes=False):
+        self.visualsOnly = visualsOnly
+        self.processMeshes = processMeshes
+
         tree = ET.parse(file)
         path, _ = os.path.split(file)
         root = tree.getroot()
@@ -84,7 +165,9 @@ class MujocoLoader():
             file = mesh.attrib.get("file", "")
             if file.startswith('visual') or file.startswith('collision'): #HACK: the true path is hidden in some compiler attribute
                 file = 'meshes/'+file
-            mesh.attrib['file'] = os.path.join(path, file)
+            if self.processMeshes:
+                file = processMesh(name, file, '', os.path.join(path,'meshes/'))
+            mesh.attrib['file'] = file #os.path.join('meshes/', file)
             self.meshes[name] = mesh.attrib
     
     def add_node(self, node, f_parent, path, level):
@@ -114,21 +197,19 @@ class MujocoLoader():
                 self.add_node(child, f_parent, path, level+1)
 
 
-    def add_body(self, node, f_parent):
+    def add_body(self, body, f_parent):
         self.bodyCount += 1
-        body_name = node.attrib.get("name", f'body_{self.bodyCount}')
-        # print('BODY', body_name, node.attrib, ' --parent:', f_parent.name)
+        body_name = body.attrib.get("name", f'body_{self.bodyCount}')
 
         f_body = self.C.addFrame(body_name)
         f_body.setParent(f_parent)
-        self.setRelativePose(f_body, node.attrib)
+        self.setRelativePose(f_body, body.attrib)
 
-        joints = node.findall("./joint")
-        for jointCount,joint in enumerate(joints):
-            # assert len(joints)==1
+        for i, joint in enumerate(body.findall("./joint")):
             axis = joint.attrib.get("axis", None)
             limits = joint.attrib.get("range", None)
-            f_origin = self.C.addFrame(f"{body_name}_origin{jointCount*'_'}")
+            name = joint.attrib.get("name", f"{body_name}_joint{i*'_'}")
+            f_origin = self.C.addFrame(f'{name}_origin')
             f_origin.setParent(f_body)
             self.setRelativePose(f_origin, joint.attrib)
             f_origin.unLink()
@@ -141,10 +222,7 @@ class MujocoLoader():
                     vec1 = np.array([0., 0., 1.])
                     vec2 = np.array(floats(axis))
                     quat = ry.Quaternion().setDiff(vec1, vec2).getArr()
-                    # new_pre = f"{body_name}_origin2"
                     f_origin.setRelativeQuaternion(quat)
-                    # lines.append(f"""{new_pre} ({pre}) {{quaternion: [{quat[0]}, {quat[1]}, {quat[2]}, {quat[3]}]}}\n""")
-                    # pre = new_pre
                     axis = ry.JT.hingeZ
             else:
                 axis = ry.JT.hingeZ
@@ -159,34 +237,31 @@ class MujocoLoader():
             if not limits:
                 limits = "-1 1"
 
-            f_joint = self.C.addFrame(f"{body_name}_joint{jointCount*'_'}") \
-                .setParent(f_origin) \
-                .setJoint(axis, floats(limits))
+            f_joint = self.C.addFrame(name)
+            f_joint.setParent(f_origin)
+            f_joint.setJoint(axis, floats(limits))
             
-            # relink things:
+            # relink body:
             f_parent = f_joint
             f_body.unLink()
             f_body.setParent(f_parent, True)
 
-        for i, geom in enumerate(node.findall("./geom")):
-            # print('GEOM', i, geom.attrib)
+        for i, geom in enumerate(body.findall("./geom")):
+            if self.visualsOnly and geom.attrib.get('contype', '')!='0':
+                continue
+
+            f_shape = self.C.addFrame(f'{body_name}_shape{i}')
+            f_shape.setParent(f_body)
+
             if 'mesh' in geom.attrib:
                 mesh = geom.attrib.get("mesh", "")
                 # material_name = geom.attrib.get("material", "")
-
-                meshfile = self.meshes[mesh]['file'] #os.path.join(path, self.models[mesh_name])
+                meshfile = self.meshes[mesh]['file']
                 scale = floats(self.meshes[mesh].get('scale', '1 1 1'))
-                # print('MESH', meshfile)
-                f_shape = self.C.addFrame(f'{body_name}_shape{i}') \
-                    .setParent(f_body) \
-                    .setMeshFile(meshfile, scale[0])
-                self.setRelativePose(f_shape, geom.attrib)
+                f_shape.setMeshFile(meshfile, scale[0])
             
             elif 'type' in geom.attrib:
                 size = floats(geom.attrib['size'])
-                f_shape = self.C.addFrame(f'{body_name}_shape{i}') \
-                    .setParent(f_body)
-                self.setRelativePose(f_shape, geom.attrib)
                 if geom.attrib['type']=='capsule':
                     if len(size)==2:
                         f_shape.setShape(ry.ST.capsule, [2.*size[1], size[0]])
@@ -196,14 +271,15 @@ class MujocoLoader():
                 if geom.attrib['type']=='box':
                     assert len(size)==3
                     f_shape.setShape(ry.ST.box, [2.*f for f in size])
-                        
                 if geom.attrib['type']=='sphere':
                     if len(size)==1:
                         f_shape.setShape(ry.ST.sphere, size)
                 
-                f_shape.setColor([.3, .3, .3, .3])
+            self.setRelativePose(f_shape, geom.attrib)
 
-            if geom.attrib.get('class', None) and 'col' in geom.attrib['class']:
+            if geom.attrib.get('rgba', None):
+                f_shape.setColor(floats(geom.attrib['rgba']))
+            elif geom.attrib.get('class', None) and 'col' in geom.attrib['class']:
                 f_shape.setColor([1,0,0,.2])
                 
         return f_body
@@ -223,47 +299,3 @@ class MujocoLoader():
             q.setRollPitchYaw(floats(rpy))
             f.setRelativeQuaternion(q.getArr())
 
-class Mujoco2Dict():
-
-    def __init__(self, file):
-        tree = ET.parse(file)
-        path, _ = os.path.split(file)
-        root = tree.getroot()
-
-        self.excludeTags = ['compiler', 'mujocoinclude', 'default', 'asset', 'include', 'key', 'site', 'worldbody', 'global', 'quality', 'map', 'camera']
-
-        self.D = OrderedDict()
-        self.D['base'] = {}
-        self.add_node(root, 'base', path, 0)
-
-    def add_node(self, node, parent: str, path, level):
-        if 'file' in node.attrib:
-            file = node.attrib['file'] 
-            node.attrib['file'] = os.path.join(path, file)
-
-        print('|'+level*'  ', node.tag, node.attrib)
-
-        if node.tag in self.excludeTags:
-            name = parent
-            # if node.tag != 'mujocoinclude' and len(list(node)):
-                # print(f'************** WARNING: removed element {node.tag}: {node.attrib} has children')
-        else:
-            name = node.attrib.get('name', None)
-            if not name:
-                name = f'{len(self.D)}'
-            else:
-                del node.attrib['name']
-                if name in self.D:
-                    print(f'WARNING: non=unique name "{name}" -> "{name}_{len(self.D)}"')
-                    name = f'{name}_{len(self.D)}'
-            self.D[name] = { 'parent': parent, 'tag': node.tag } | node.attrib
-
-        if node.tag == 'include':
-            file = node.attrib['file'] 
-            tree = ET.parse(file)
-            root = tree.getroot()
-            path, _ = os.path.split(file)
-            self.add_node(root, parent, path, level+1)
-
-        for child in node:
-            self.add_node(child, name, path, level+1)

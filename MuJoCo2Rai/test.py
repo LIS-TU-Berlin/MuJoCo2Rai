@@ -24,10 +24,16 @@ def test_kitchen_franka():
     #     print(f'{key}: {value}')
     #print(yaml.dump(M.D))#, default_flow_style=True))
     # return
-    M = MujocoLoader(file)
+    M = MujocoLoader(file, visualsOnly=True, processMeshes=False)
     M.base.setQuaternion([0,0,0,1])
     M.base.setPosition([3,0,0])
-    # print('loaded frames: ', M.C.getFrameNames())
+    print('loaded #frames: ', M.C.getFrameDimension())
+    os.system('rm -Rf meshes/')
+    M.C.writeMeshes('meshes/')
+    M.C.simplify(True, False, True)
+    print('simplified #frames: ', M.C.getFrameDimension())
+    with open("z.g", "w") as fil:
+        fil.write(M.C.write())
     for i in range(1):
         M.C.view(True)
         M.C.animate()

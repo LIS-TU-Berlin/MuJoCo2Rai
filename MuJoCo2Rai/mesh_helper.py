@@ -190,8 +190,8 @@ class MeshHelper():
 
 
 
-    def export_h5(self, convex=False):
-        with h5py.File(self.filebase+'.h5', 'w') as fil:
+    def export_h5(self, filename, inertia=False, convex=False):
+        with h5py.File(filename, 'w') as fil:
             fil.create_dataset('mesh/vertices', data=self.mesh.vertices, dtype='float32')
             assert self.mesh.faces.shape[1]==3, 'can only export triangle meshes'
             if(self.mesh.vertices.shape[0]<65535):
@@ -205,21 +205,24 @@ class MeshHelper():
             except:
                 print("no colors for:", self.filebase)
 
-            fil.create_dataset('points/vertices', data=self.pts, dtype='float32')
-            #fil.create_dataset('points/normals', data=self.normals, dtype='float32')
-            if (convex):
+            if hasattr(self, 'pts') and self.pts.shape[1]==3:
+                fil.create_dataset('points/vertices', data=self.pts, dtype='float32')
+                #fil.create_dataset('points/normals', data=self.normals, dtype='float32')
+            if hasattr(self, 'decomp_vertices') and self.decomp_vertices.shape[1]==3:
                 fil.create_dataset('decomp/vertices', data=self.decomp_vertices, dtype='float32')
                 assert self.decomp_faces.shape[0]<65535
                 fil.create_dataset('decomp/faces', data=self.decomp_faces, dtype='uint16')
                 fil.create_dataset('decomp/colors', data=self.decomp_colors, dtype='uint8')
                 assert self.decomp_parts.shape[ 0]<65535
                 fil.create_dataset('decomp/parts', data=self.decomp_parts, dtype='uint16')
-            fil.create_dataset('inertia/mass', data=[self.mesh.mass], dtype='float32')
-            fil.create_dataset('inertia/com', data=self.mesh.center_mass, dtype='float32')
-            if self.inertiaIsDiagonal:
-                fil.create_dataset('inertia/tensor', data=np.diagonal(self.mesh.moment_inertia), dtype='float32')
-            else:
-                fil.create_dataset('inertia/tensor', data=self.mesh.moment_inertia, dtype='float32')
+
+            if inertia:
+                fil.create_dataset('inertia/mass', data=[self.mesh.mass], dtype='float32')
+                fil.create_dataset('inertia/com', data=self.mesh.center_mass, dtype='float32')
+                if self.inertiaIsDiagonal:
+                    fil.create_dataset('inertia/tensor', data=np.diagonal(self.mesh.moment_inertia), dtype='float32')
+                else:
+                    fil.create_dataset('inertia/tensor', data=self.mesh.moment_inertia, dtype='float32')
         
     
 def timeout(signum, frame):
