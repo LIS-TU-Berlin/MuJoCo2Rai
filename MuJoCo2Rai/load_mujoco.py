@@ -142,6 +142,7 @@ class MujocoLoader():
 
         self.C = ry.Config()
         self.base = self.C.addFrame('base')
+        self.base.addAttributes({'muldibody':True})
         self.add_node(root, self.base, path, 0)
 
     def load_assets(self, root, path):

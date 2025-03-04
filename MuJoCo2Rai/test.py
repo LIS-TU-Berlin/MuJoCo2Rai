@@ -33,6 +33,7 @@ def test_kitchen_franka():
     M.C.simplify(True, False, True)
     print('simplified #frames: ', M.C.getFrameDimension())
     with open("z.g", "w") as fil:
+        #yaml.dump(M.C.asDict(), file, default_flow_style=False)
         fil.write(M.C.write())
     for i in range(1):
         M.C.view(True)
