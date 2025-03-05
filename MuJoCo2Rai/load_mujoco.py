@@ -6,7 +6,7 @@ import trimesh
 from PIL import Image
 from copy import copy
 from mesh_helper import *
-
+from utils import pose_matrix_to_7d
 from collections import OrderedDict
 
 muj2rai_joint_map = {
@@ -46,95 +46,52 @@ def print_xml(file):
 
 ## --- same with building the condig:
 
-def obj2ply(meshfile: str, ply_out: str, scale: float=1.0, texture_path: str="none") -> bool:
-
-    tri_obj = trimesh.load(meshfile)
-    if hasattr(tri_obj.visual, 'to_color'):
-
-        if texture_path == "none":
-            vertex_colors_visual = tri_obj.visual.to_color()
-            tri_obj.visual = vertex_colors_visual
-        elif texture_path:
-            try:
-                texture_image = Image.open(texture_path)
-                
-                texture = trimesh.visual.TextureVisuals(image=texture_image, uv=tri_obj.visual.uv)
-                tri_obj.visual = texture
+# TODO process_mesh not in right position yet, bc texture files get assigned through materials for the first time in <body> tag
+# def process_mesh(name: str, meshfile: str, texturefile: str, out_path: str, scaling: float = 1.0):
+#     """
+#     Process a mesh: apply texture, scaling, and export to .h5.
     
-                
-                texture = Image.open(texture_path)
-                texture = np.array(texture).astype(float) / 255.0
-                
-                if texture.shape[-1] == 3:
-                    alpha = np.ones((texture.shape[0], texture.shape[1], 1))
-                    texture = np.concatenate([texture, alpha], axis=-1)
-                
-                if not hasattr(tri_obj.visual, 'uv'):
-                    raise ValueError("Mesh does not have UV coordinates!")
-                
-                uv_coords = tri_obj.visual.uv
-                
-                uv_coords_copy = uv_coords.copy()
-                uv_coords_copy[:, 1] = 1 - uv_coords_copy[:, 1]
-                
-                pixel_coords = np.zeros_like(uv_coords_copy)
-                pixel_coords[:, 0] = uv_coords_copy[:, 0] * (texture.shape[1] - 1)
-                pixel_coords[:, 1] = uv_coords_copy[:, 1] * (texture.shape[0] - 1)
-                pixel_coords = pixel_coords.astype(int)
-                
-                vertex_colors = texture[pixel_coords[:, 1], pixel_coords[:, 0]]
-                
-                tri_obj.visual = trimesh.visual.ColorVisuals(
-                    mesh=tri_obj,
-                    vertex_colors=vertex_colors
-                )
-                
-                
-            except:
-                print(texture_path, "is not a path to a texture or could not been applied vertex wise to the mesh.")
-        if scale != 1.0:
-            print(scale)
-            scaling_mat = scale * np.eye(4)
-            scaling_mat[-1, -1] = 1.0
-            tri_obj.apply_transform(scaling_mat)
-
-        tri_obj.export('tmp.ply')
-        print(f"Converted {meshfile}")
-        
-        M = MeshHelper('tmp.ply')
-        # transform_mat = M.transformInertia()
-        # M.createPoints()
-        # M.createDecomposition()
-        M.export_h5(ply_out, True)
-        return True
-        
-    else:
-        print(f"Failed on {meshfile}")
-        return False
-
-def processMesh(name: str, meshfile: str, texturefile: str, out_path: str, scaling: float=1.0) -> str:
-
-    meshfile = os.path.join(meshfile)
-    texturefile = os.path.join(texturefile)
-    newmeshfile = os.path.join(out_path, f"{name}.mesh.h5")
-
-    ply_success = obj2ply(meshfile, newmeshfile, texture_path=texturefile, scale=scaling)
-    if ply_success:
-        return newmeshfile
-    return None
+#     Args:
+#         name (str): Name of the mesh.
+#         meshfile (str): Path to the input OBJ file.
+#         texturefile (str): Path to the texture image.
+#         out_path (str): Output directory for the processed mesh.
+#         scaling (float): Scaling factor to apply to the mesh.
+    
+#     Returns:
+#         str: Path to the exported .h5 file if successful, otherwise None.
+#     """
+#     meshfile = os.path.abspath(meshfile)
+#     texturefile = os.path.abspath(texturefile)
+#     newmeshfile = os.path.join(out_path, f"{name}.mesh.h5")
+    
+#     success, pose_matrix, output_file = obj2ply(
+#         meshfile,
+#         scale=scaling,
+#         texture_path=texturefile,
+#         output_file=newmeshfile
+#     )
+    
+#     if success:
+#         print(f"Pose matrix for {name}:\n{pose_matrix}")
+#         return output_file
+#     else:
+#         return None
 
 ## 
+
 class MujocoLoader():
 
     def __init__(self, file, visualsOnly=True, processMeshes=False):
         self.visualsOnly = visualsOnly
         self.processMeshes = processMeshes
+        self.debug_counter = 0
 
         tree = ET.parse(file)
         path, _ = os.path.split(file)
         root = tree.getroot()
 
-        self.materials = {}
+        self.materials = {}    
         self.textures = {}
         self.meshes = {}
         self.load_assets(root, path)
@@ -142,8 +99,8 @@ class MujocoLoader():
 
         self.C = ry.Config()
         self.base = self.C.addFrame('base')
-        self.base.addAttributes({'muldibody':True})
         self.add_node(root, self.base, path, 0)
+
 
     def load_assets(self, root, path):
         texs = root.findall(".//texture")
@@ -155,9 +112,12 @@ class MujocoLoader():
         maters = root.findall(".//material")
         for mater in maters:
             name = mater.attrib.get("name", "")
-            name = mater.attrib.get("texture", "")
-            if name:
-                self.materials[name] = self.textures[name]
+            color = mater.attrib.get("rgba", "")
+            texture_name = mater.attrib.get("texture", "")
+            if texture_name:
+                self.materials[name] = self.textures[texture_name]
+            elif color:
+                self.materials[name] = color
             else:
                 self.materials[name] = ""
 
@@ -167,13 +127,15 @@ class MujocoLoader():
             if file.startswith('visual') or file.startswith('collision'): #HACK: the true path is hidden in some compiler attribute
                 file = 'meshes/'+file
             if self.processMeshes:
-                file = processMesh(name, file, '', os.path.join(path,'meshes/'))
+                pass
+                #file = processMesh(name, file, '', os.path.join(path,'meshes/'))
             mesh.attrib['file'] = file #os.path.join('meshes/', file)
             self.meshes[name] = mesh.attrib
     
     def add_node(self, node, f_parent, path, level):
         if 'file' in node.attrib:
-            file = node.attrib['file'] 
+            file = node.attrib['file']
+            print(file) 
             node.attrib['file'] = os.path.join(path, file)
 
         print('|'+level*'  ', node.tag, node.attrib)
@@ -181,6 +143,7 @@ class MujocoLoader():
         f_body = None
 
         if node.tag=='body':
+            
             f_body = self.add_body(node, f_parent)
 
         if node.tag == 'include':
@@ -259,27 +222,55 @@ class MujocoLoader():
                 # material_name = geom.attrib.get("material", "")
                 meshfile = self.meshes[mesh]['file']
                 scale = floats(self.meshes[mesh].get('scale', '1 1 1'))
-                f_shape.setMeshFile(meshfile, scale[0])
-            
+
+                material_name = geom.attrib.get("material", "")
+                texture_path = self.materials.get(material_name, None)
+                
+                if texture_path:
+                    if len(texture_path.split()) == 4:  # Is a color rgba
+                        f_shape.setMeshFile(meshfile, scale[0])
+                        f_shape.setColor([float(x) for x in texture_path.split()])
+                    else:
+                        M = MeshHelper(meshfile)
+                        M.obj2ply(ply_out="tmp.ply", scale=1, texture_path=texture_path, cvxDecomp=False)
+                        f_shape.setMeshFile(meshfile[:-4]+".h5", scale[0])
+                        # TODO after fixing inertia
+                        #f_shape.setPose(pose_matrix_to_7d(M.pose))
+                        
+                print(f"Assigned texture {texture_path} to {mesh}")
+
             elif 'type' in geom.attrib:
                 size = floats(geom.attrib['size'])
                 if geom.attrib['type']=='capsule':
                     if len(size)==2:
                         f_shape.setShape(ry.ST.capsule, [2.*size[1], size[0]])
+                        
                 if geom.attrib['type']=='cylinder':
                     if len(size)==2:
                         f_shape.setShape(ry.ST.cylinder, [2.*size[1], size[0]])
                 if geom.attrib['type']=='box':
                     assert len(size)==3
                     f_shape.setShape(ry.ST.box, [2.*f for f in size])
+                    if geom.attrib.get("material", None):
+                        texture_path = self.materials[geom.attrib.get("material", None)]
+                                             
+                        if len(texture_path.split()) == 4:  # Is a color rgba
+                            f_shape.setColor([float(x) for x in texture_path.split()])
+                        else:
+                            f_shape.setTextureFile(self.materials[geom.attrib.get("material", None)], np.random.rand(8,2))
+
                 if geom.attrib['type']=='sphere':
                     if len(size)==1:
                         f_shape.setShape(ry.ST.sphere, size)
                 
+                color = geom.attrib.get("rgba", None)
+
             self.setRelativePose(f_shape, geom.attrib)
 
             if geom.attrib.get('rgba', None):
-                f_shape.setColor(floats(geom.attrib['rgba']))
+                if geom.attrib.get("material", None) is None:
+                    f_shape.setColor(floats(geom.attrib['rgba']))
+
             elif geom.attrib.get('class', None) and 'col' in geom.attrib['class']:
                 f_shape.setColor([1,0,0,.2])
                 

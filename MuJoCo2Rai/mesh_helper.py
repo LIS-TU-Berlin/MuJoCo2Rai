@@ -6,6 +6,7 @@ import base64
 import yaml
 import h5py
 import matplotlib.pyplot as plt
+from PIL import Image
 
 def write_arr(X, fil, type='float32'):
     data = (type, list(X.shape), )
@@ -23,7 +24,7 @@ class MeshHelper():
         self.failed = False
         self.inertiaIsDiagonal = False
         self.load(file)
-        
+        self.file = file
 
     def load(self, file):
         print('=== file: ', file)
@@ -224,6 +225,70 @@ class MeshHelper():
                 else:
                     fil.create_dataset('inertia/tensor', data=self.mesh.moment_inertia, dtype='float32')
         
+    def apply_texture(self, tri_obj, texture_path):
+        try:
+            texture_image = Image.open(texture_path)
+            texture = trimesh.visual.TextureVisuals(image=texture_image, uv=tri_obj.visual.uv)
+            tri_obj.visual = texture
+            
+            texture = np.array(texture_image).astype(float) / 255.0
+            if texture.shape[-1] == 3:
+                alpha = np.ones((texture.shape[0], texture.shape[1], 1))
+                texture = np.concatenate([texture, alpha], axis=-1)
+            
+            if not hasattr(tri_obj.visual, 'uv'):
+                raise ValueError("Mesh does not have UV coordinates!")
+            
+            uv_coords = tri_obj.visual.uv
+            uv_coords_copy = uv_coords.copy()
+            uv_coords_copy[:, 1] = 1 - uv_coords_copy[:, 1]
+            
+            pixel_coords = (uv_coords_copy * [texture.shape[1] - 1, texture.shape[0] - 1]).astype(int)
+            vertex_colors = texture[pixel_coords[:, 1], pixel_coords[:, 0]]
+            
+            tri_obj.visual = trimesh.visual.ColorVisuals(mesh=tri_obj, vertex_colors=vertex_colors)
+        except Exception as e:
+            print(texture_path, "is not a valid texture path or could not be applied to the mesh.", e)
+
+
+    def apply_scaling(self, tri_obj, scale):
+        if scale != 1.0:
+            print(scale)
+            scaling_mat = scale * np.eye(4)
+            scaling_mat[-1, -1] = 1.0
+            tri_obj.apply_transform(scaling_mat)
+
+
+    def export_mesh(self, tri_obj, meshfile, ply_out, transformInertia, cvxDecomp):
+        tri_obj.export(ply_out)
+        print(f"Converted {meshfile}")
+        M = MeshHelper(ply_out)
+        if transformInertia:
+            self.pose = M.transformInertia()
+        if cvxDecomp:
+            M.createDecomposition()
+        M.export_h5(meshfile[:-3]+'h5', inertia=False, convex=True)
+
+
+    def obj2ply(self, ply_out: str, scale: float=1.0, texture_path: str="none", transformInertia = False, cvxDecomp = False) -> bool:
+        tri_obj = self.mesh
+        if hasattr(tri_obj.visual, 'to_color'):
+            if texture_path == "none":
+                tri_obj.visual = tri_obj.visual.to_color()
+            else:
+                self.apply_texture(tri_obj, texture_path)
+            
+        elif hasattr(tri_obj.visual, 'vertex_colors'):
+            print("Mesh already has vertex colors.")
+        
+        else:
+            print(f"Failed on {tri_obj}")
+            return False
+        
+        self.apply_scaling(tri_obj, scale)
+        self.export_mesh(tri_obj, self.file, ply_out, transformInertia, cvxDecomp)
+        
+        return True
     
 def timeout(signum, frame):
     raise Exception("timeout handler")
