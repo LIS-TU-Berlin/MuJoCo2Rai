@@ -5,8 +5,8 @@ import numpy as np
 import trimesh
 from PIL import Image
 from copy import copy
-from mesh_helper import *
-from utils import pose_matrix_to_7d
+from MuJoCo2Rai.mesh_helper import *
+from MuJoCo2Rai.utils import pose_matrix_to_7d
 from collections import OrderedDict
 
 muj2rai_joint_map = {
