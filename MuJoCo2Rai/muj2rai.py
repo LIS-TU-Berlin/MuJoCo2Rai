@@ -45,7 +45,7 @@ def load_model_dicts(root, out_path: str, root_path: str, materials: dict[str]) 
     return models
 
 
-def obj2ply(obj_file: str, ply_out: str, scale: float=1.0, texture_path: str="none", toH5: bool = True) -> bool:
+def obj2ply(obj_file: str, ply_out: str, scale: float=1.0, texture_path: str="none", toH5: bool = False) -> bool:
 
     tri_obj = trimesh.load(obj_file)
     if hasattr(tri_obj.visual, 'to_color'):
