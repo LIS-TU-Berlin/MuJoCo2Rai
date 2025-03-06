@@ -5,8 +5,8 @@ import numpy as np
 import trimesh
 from PIL import Image
 from copy import copy
-from MuJoCo2Rai.mesh_helper import *
-from MuJoCo2Rai.utils import pose_matrix_to_7d
+from mesh_helper import *
+from utils import pose_matrix_to_7d
 from collections import OrderedDict
 
 muj2rai_joint_map = {
@@ -78,8 +78,6 @@ def print_xml(file):
 #     else:
 #         return None
 
-## 
-
 class MujocoLoader():
 
     def __init__(self, file, visualsOnly=True, processMeshes=False):
@@ -99,8 +97,8 @@ class MujocoLoader():
 
         self.C = ry.Config()
         self.base = self.C.addFrame('base')
+        self.base.addAttributes({'muldibody':True})
         self.add_node(root, self.base, path, 0)
-
 
     def load_assets(self, root, path):
         texs = root.findall(".//texture")
@@ -126,16 +124,12 @@ class MujocoLoader():
             file = mesh.attrib.get("file", "")
             if file.startswith('visual') or file.startswith('collision'): #HACK: the true path is hidden in some compiler attribute
                 file = 'meshes/'+file
-            if self.processMeshes:
-                pass
-                #file = processMesh(name, file, '', os.path.join(path,'meshes/'))
-            mesh.attrib['file'] = file #os.path.join('meshes/', file)
+            mesh.attrib['file'] = file
             self.meshes[name] = mesh.attrib
     
     def add_node(self, node, f_parent, path, level):
         if 'file' in node.attrib:
             file = node.attrib['file']
-            print(file) 
             node.attrib['file'] = os.path.join(path, file)
 
         print('|'+level*'  ', node.tag, node.attrib)
@@ -143,7 +137,6 @@ class MujocoLoader():
         f_body = None
 
         if node.tag=='body':
-            
             f_body = self.add_body(node, f_parent)
 
         if node.tag == 'include':
@@ -159,7 +152,6 @@ class MujocoLoader():
                 self.add_node(child, f_body, path, level+1)
             else:
                 self.add_node(child, f_parent, path, level+1)
-
 
     def add_body(self, body, f_parent):
         self.bodyCount += 1
@@ -219,32 +211,31 @@ class MujocoLoader():
 
             if 'mesh' in geom.attrib:
                 mesh = geom.attrib.get("mesh", "")
-                # material_name = geom.attrib.get("material", "")
+                material_name = geom.attrib.get("material", "")
+                texture_path = self.materials.get(material_name, None)
                 meshfile = self.meshes[mesh]['file']
                 scale = floats(self.meshes[mesh].get('scale', '1 1 1'))
 
-                material_name = geom.attrib.get("material", "")
-                texture_path = self.materials.get(material_name, None)
-                
-                if texture_path:
-                    if len(texture_path.split()) == 4:  # Is a color rgba
-                        f_shape.setMeshFile(meshfile, scale[0])
-                        f_shape.setColor([float(x) for x in texture_path.split()])
-                    else:
-                        M = MeshHelper(meshfile)
-                        M.obj2ply(ply_out="tmp.ply", scale=1, texture_path=texture_path, cvxDecomp=False)
-                        f_shape.setMeshFile(meshfile[:-4]+".h5", scale[0])
-                        # TODO after fixing inertia
-                        #f_shape.setPose(pose_matrix_to_7d(M.pose))
-                        
-                print(f"Assigned texture {texture_path} to {mesh}")
+                if self.processMeshes or texture_path:
+                    M = MeshHelper(meshfile)
+                    if texture_path and len(texture_path.split()) != 4:
+                        M.apply_texture(texture_path)
+                        M.texture2vertexColors()
+                    M.repair()
+                    meshfile = meshfile[:-4]+".h5"
+                    M.export_h5(meshfile)
+                    # print(f"Assigned texture {texture_path} to {mesh}")
+
+                f_shape.setMeshFile(meshfile, scale[0])
+
+                if texture_path and len(texture_path.split()) == 4:  # Is a color rgba
+                    f_shape.setColor(floats(texture_path))                        
 
             elif 'type' in geom.attrib:
                 size = floats(geom.attrib['size'])
                 if geom.attrib['type']=='capsule':
                     if len(size)==2:
                         f_shape.setShape(ry.ST.capsule, [2.*size[1], size[0]])
-                        
                 if geom.attrib['type']=='cylinder':
                     if len(size)==2:
                         f_shape.setShape(ry.ST.cylinder, [2.*size[1], size[0]])
@@ -255,7 +246,7 @@ class MujocoLoader():
                         texture_path = self.materials[geom.attrib.get("material", None)]
                                              
                         if len(texture_path.split()) == 4:  # Is a color rgba
-                            f_shape.setColor([float(x) for x in texture_path.split()])
+                            f_shape.setColor(floats(texture_path))
                         else:
                             f_shape.setTextureFile(self.materials[geom.attrib.get("material", None)], np.random.rand(8,2))
 
@@ -263,8 +254,6 @@ class MujocoLoader():
                     if len(size)==1:
                         f_shape.setShape(ry.ST.sphere, size)
                 
-                color = geom.attrib.get("rgba", None)
-
             self.setRelativePose(f_shape, geom.attrib)
 
             if geom.attrib.get('rgba', None):

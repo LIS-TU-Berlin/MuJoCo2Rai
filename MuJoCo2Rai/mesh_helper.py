@@ -73,7 +73,6 @@ class MeshHelper():
         print("prior COM" , self.mesh.center_mass)
         print("prior inertia\n" , self.mesh.moment_inertia)
 
-
         U, D, V = np.linalg.svd(self.mesh.moment_inertia)
 
         # Ensure proper rotation  
@@ -93,43 +92,33 @@ class MeshHelper():
 
         return np.linalg.inv(matrix)
 
-    def repair(self):
+    def repair(self, mergeTolerance=1e-6):
         try:
-            trimesh.constants.tol.merge = 1e-6
+            trimesh.constants.tol.merge = mergeTolerance
             self.mesh.process(validate=True)
             trimesh.repair.fill_holes(self.mesh)
             trimesh.repair.fix_inversion(self.mesh, multibody=True)
         except Exception as e:
             print('  --- repair failed ---', e)
+            print('  --- this might be a trimesh bug: change order within mesh.process method')
             self.failed = True
             exit(0) # this might be a trimesh bug: change order within mesh.process method
 
-        if self.mesh.visual != None:
-            self.mesh.visual.uv = np.array([[0,0]])
+        # if self.mesh.visual != None:
+            # self.mesh.visual.uv = np.array([[0,0]])
+
+    def texture2vertexColors(self):
+        if hasattr(self.mesh.visual, 'uv'):
+            colors = self.mesh.visual.material.to_color(self.mesh.visual.uv)
+            vis = trimesh.visual.ColorVisuals(mesh=self.mesh, vertex_colors=colors)
+            self.mesh.visual = vis
+        # else:
+            # raise ValueError("Mesh does not have UV coordinates!")
 
     def export_ply(self):
-        print('  exporting as ply and mesh')
-        self.mesh.export(self.filebase+'-.ply')
-
-    def export_mesh(self, include_mass_properties=True):
-        with open(self.filebase+'.mesh', 'w', encoding='utf-8') as fil:
-            fil.write('{\nV: ')
-            write_arr(self.mesh.vertices, fil)
-            assert self.mesh.faces.shape[1]==3, 'can only export triangle meshes'
-            fil.write(', \nT: ')
-            if(self.mesh.vertices.shape[0]<65535):
-                write_arr(self.mesh.faces, fil, 'uint16')
-            else:
-                write_arr(self.mesh.faces, fil, 'uint32')
-            if include_mass_properties:
-                fil.write(f', \nmass: {self.mesh.mass}')
-                # fil.write(f', \nvolume: {self.mesh.volume}')
-                fil.write(f', \ncom: {self.mesh.center_mass.tolist()}')
-                if self.inertiaIsDiagonal:
-                    fil.write(f', \ninertia: {np.diagonal(self.mesh.moment_inertia).tolist()}')
-                else:
-                    fil.write(f', \ninertia: {self.mesh.moment_inertia.reshape([9]).tolist()}')
-            fil.write('\n}')
+        filename = self.filebase+'-.ply'
+        print('  exporting', filename)
+        self.mesh.export(filename)
 
     def export_scene(self, convex=False):
         with open(self.filebase+'.g', 'w', encoding='utf-8') as fil:
@@ -141,9 +130,6 @@ class MeshHelper():
             fil.write(f'obj_mesh (obj): {{ mesh: <{self.filebase}.h5> }}\n')
             #fil.write(f'obj_points (obj): {{ mesh_points: <{self.filebase}.h5>, color: [1 1 0], size: [2.] }}\n')
             return self.filebase+'.g'
-
-
-
 
     def createPoints(self):
         self.pts, faces = trimesh.sample.sample_surface(self.mesh, 20000)
@@ -189,9 +175,10 @@ class MeshHelper():
         self.decomp_colors = conv_tuple_arr(decomp['C'])
         self.decomp_parts = conv_tuple_arr(decomp['cvxParts'])
 
-
-
-    def export_h5(self, filename, inertia=False, convex=False):
+    def export_h5(self, filename=None, inertia=False):
+        if filename is None:
+            filename = self.filebase+'.h5'
+        print('  exporting', filename)
         with h5py.File(filename, 'w') as fil:
             fil.create_dataset('mesh/vertices', data=self.mesh.vertices, dtype='float32')
             assert self.mesh.faces.shape[1]==3, 'can only export triangle meshes'
@@ -200,15 +187,25 @@ class MeshHelper():
             else:
                 fil.create_dataset('mesh/faces', data=self.mesh.faces, dtype='uint32')
             
-            try:
+            if hasattr(self.mesh.visual, 'vertex_colors'):
                 colors = np.asarray(self.mesh.visual.vertex_colors)[:,0:3]
                 fil.create_dataset('mesh/colors', data=colors, dtype='uint8')
-            except:
-                print("no colors for:", self.filebase)
+
+            if hasattr(self.mesh.visual, 'uv'):
+                if hasattr(self.mesh.visual.material, 'baseColorTexture'):
+                    img = self.mesh.visual.material.baseColorTexture
+                else:
+                    img = self.mesh.visual.material.image
+                if img is not None:
+                    texCoords = self.mesh.visual.uv
+                    texImg = 255.*np.asanyarray(img.convert("RGB"))
+                    fil.create_dataset('mesh/textureCoords', data=texCoords, dtype='float32')
+                    fil.create_dataset('mesh/textureImg', data=texImg, dtype='uint8')
 
             if hasattr(self, 'pts') and self.pts.shape[1]==3:
                 fil.create_dataset('points/vertices', data=self.pts, dtype='float32')
-                #fil.create_dataset('points/normals', data=self.normals, dtype='float32')
+                fil.create_dataset('points/normals', data=self.normals, dtype='float32')
+
             if hasattr(self, 'decomp_vertices') and self.decomp_vertices.shape[1]==3:
                 fil.create_dataset('decomp/vertices', data=self.decomp_vertices, dtype='float32')
                 assert self.decomp_faces.shape[0]<65535
@@ -225,70 +222,70 @@ class MeshHelper():
                 else:
                     fil.create_dataset('inertia/tensor', data=self.mesh.moment_inertia, dtype='float32')
         
-    def apply_texture(self, tri_obj, texture_path):
+    def apply_texture(self, texture_path):
         try:
             texture_image = Image.open(texture_path)
-            texture = trimesh.visual.TextureVisuals(image=texture_image, uv=tri_obj.visual.uv)
-            tri_obj.visual = texture
+            texture = trimesh.visual.TextureVisuals(image=texture_image, uv=self.mesh.visual.uv)
+            self.mesh.visual = texture
             
-            texture = np.array(texture_image).astype(float) / 255.0
-            if texture.shape[-1] == 3:
-                alpha = np.ones((texture.shape[0], texture.shape[1], 1))
-                texture = np.concatenate([texture, alpha], axis=-1)
+            # texture = np.array(texture_image).astype(float) / 255.0
+            # if texture.shape[-1] == 3:
+            #     alpha = np.ones((texture.shape[0], texture.shape[1], 1))
+            #     texture = np.concatenate([texture, alpha], axis=-1)
             
-            if not hasattr(tri_obj.visual, 'uv'):
-                raise ValueError("Mesh does not have UV coordinates!")
+            # if not hasattr(self.mesh.visual, 'uv'):
+            #     raise ValueError("Mesh does not have UV coordinates!")
             
-            uv_coords = tri_obj.visual.uv
-            uv_coords_copy = uv_coords.copy()
-            uv_coords_copy[:, 1] = 1 - uv_coords_copy[:, 1]
+            # uv_coords = self.mesh.visual.uv
+            # uv_coords_copy = uv_coords.copy()
+            # uv_coords_copy[:, 1] = 1 - uv_coords_copy[:, 1]
             
-            pixel_coords = (uv_coords_copy * [texture.shape[1] - 1, texture.shape[0] - 1]).astype(int)
-            vertex_colors = texture[pixel_coords[:, 1], pixel_coords[:, 0]]
+            # pixel_coords = (uv_coords_copy * [texture.shape[1] - 1, texture.shape[0] - 1]).astype(int)
+            # vertex_colors = texture[pixel_coords[:, 1], pixel_coords[:, 0]]
             
-            tri_obj.visual = trimesh.visual.ColorVisuals(mesh=tri_obj, vertex_colors=vertex_colors)
+            # self.mesh.visual = trimesh.visual.ColorVisuals(mesh=self.mesh, vertex_colors=vertex_colors)
         except Exception as e:
             print(texture_path, "is not a valid texture path or could not be applied to the mesh.", e)
 
 
-    def apply_scaling(self, tri_obj, scale):
-        if scale != 1.0:
-            print(scale)
-            scaling_mat = scale * np.eye(4)
-            scaling_mat[-1, -1] = 1.0
-            tri_obj.apply_transform(scaling_mat)
+    # def apply_scaling(self, tri_obj, scale):
+    #     if scale != 1.0:
+    #         print(scale)
+    #         scaling_mat = scale * np.eye(4)
+    #         scaling_mat[-1, -1] = 1.0
+    #         tri_obj.apply_transform(scaling_mat)
 
 
-    def export_mesh(self, tri_obj, meshfile, ply_out, transformInertia, cvxDecomp):
-        tri_obj.export(ply_out)
-        print(f"Converted {meshfile}")
-        M = MeshHelper(ply_out)
-        if transformInertia:
-            self.pose = M.transformInertia()
-        if cvxDecomp:
-            M.createDecomposition()
-        M.export_h5(meshfile[:-3]+'h5', inertia=False, convex=True)
+    # def export_mesh(self, tri_obj, meshfile, ply_out, transformInertia, cvxDecomp):
+    #     tri_obj.export(ply_out)
+    #     print(f"Converted {meshfile}")
+    #     M = MeshHelper(ply_out)
+    #     if transformInertia:
+    #         self.pose = M.transformInertia()
+    #     if cvxDecomp:
+    #         M.createDecomposition()
+    #     M.export_h5(meshfile[:-3]+'h5', inertia=False)
 
 
-    def obj2ply(self, ply_out: str, scale: float=1.0, texture_path: str="none", transformInertia = False, cvxDecomp = False) -> bool:
-        tri_obj = self.mesh
-        if hasattr(tri_obj.visual, 'to_color'):
-            if texture_path == "none":
-                tri_obj.visual = tri_obj.visual.to_color()
-            else:
-                self.apply_texture(tri_obj, texture_path)
+    # def obj2ply(self, ply_out: str, scale: float=1.0, texture_path: str="none", transformInertia = False, cvxDecomp = False) -> bool:
+    #     tri_obj = self.mesh
+    #     if hasattr(tri_obj.visual, 'to_color'):
+    #         if texture_path == "none":
+    #             tri_obj.visual = tri_obj.visual.to_color()
+    #         else:
+    #             self.apply_texture(tri_obj, texture_path)
             
-        elif hasattr(tri_obj.visual, 'vertex_colors'):
-            print("Mesh already has vertex colors.")
+    #     elif hasattr(tri_obj.visual, 'vertex_colors'):
+    #         print("Mesh already has vertex colors.")
         
-        else:
-            print(f"Failed on {tri_obj}")
-            return False
+    #     else:
+    #         print(f"Failed on {tri_obj}")
+    #         return False
         
-        self.apply_scaling(tri_obj, scale)
-        self.export_mesh(tri_obj, self.file, ply_out, transformInertia, cvxDecomp)
+    #     self.apply_scaling(tri_obj, scale)
+    #     self.export_mesh(tri_obj, self.file, ply_out, transformInertia, cvxDecomp)
         
-        return True
+    #     return True
     
 def timeout(signum, frame):
     raise Exception("timeout handler")

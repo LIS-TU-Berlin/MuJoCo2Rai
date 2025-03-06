@@ -18,13 +18,15 @@ def test_kitchen_franka():
     pysite = sysconfig.get_paths()["purelib"]
     file = pysite+"/gymnasium_robotics/envs/assets/kitchen_franka/kitchen_assets/kitchen_env_model.xml"
     file = '../kitchen_dataset/RUSTIC_ONE_WALL_SMALL.xml'
+    # file = '../kitchen_dataset/FARMHOUSE_U_SHAPED_LARGE.xml'
+
     print('=====================', file)
     # M = Mujoco2Dict(file)
     # for key, value in M.D.items():
     #     print(f'{key}: {value}')
     #print(yaml.dump(M.D))#, default_flow_style=True))
     # return
-    M = MujocoLoader(file, visualsOnly=True, processMeshes=False)
+    M = MujocoLoader(file, visualsOnly=True, processMeshes=True)
     M.base.setQuaternion([0,0,0,1])
     M.base.setPosition([3,0,0])
     print('loaded #frames: ', M.C.getFrameDimension())
