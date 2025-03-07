@@ -255,7 +255,19 @@ class MujocoLoader():
                             f_shape.setColor(floats(texture_path))
                         else:
                             print('applying to box:', texture_path)
-                            f_shape.setTextureFile(texture_path, np.random.rand(8,2))
+                            #TODO incorperate <texrepeat> tag correctly    
+                            uv_coords = np.array([
+                            [0, 0],  # vertex 0
+                            [1, 0],  # vertex 1
+                            [1, 1],  # vertex 2
+                            [0, 1],  # vertex 3
+                            [0, 0],  # vertex 4
+                            [1, 0],  # vertex 5
+                            [1, 1],  # vertex 6
+                            [0, 1]   # vertex 7
+                            ])
+                            
+                            f_shape.setTextureFile(texture_path, uv_coords)
 
                 elif geom.attrib['type']=='sphere':
                     if len(size)==1:
