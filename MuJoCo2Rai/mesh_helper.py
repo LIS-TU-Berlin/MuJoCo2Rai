@@ -115,8 +115,9 @@ class MeshHelper():
         # else:
             # raise ValueError("Mesh does not have UV coordinates!")
 
-    def export_ply(self):
-        filename = self.filebase+'-.ply'
+    def export_ply(self, filename=None):
+        if filename is None:
+            filename = self.filebase+'-.ply'
         print('  exporting', filename)
         self.mesh.export(filename)
 

@@ -157,6 +157,8 @@ class MujocoLoader():
         self.bodyCount += 1
         body_name = body.attrib.get("name", f'body_{self.bodyCount}')
 
+        # if self.C.getFrame(body_name, False):
+        body_name = f'{body_name}_{self.bodyCount}'
         f_body = self.C.addFrame(body_name)
         f_body.setParent(f_parent)
         self.setRelativePose(f_body, body.attrib)
@@ -164,8 +166,8 @@ class MujocoLoader():
         for i, joint in enumerate(body.findall("./joint")):
             axis = joint.attrib.get("axis", None)
             limits = joint.attrib.get("range", None)
-            name = joint.attrib.get("name", f"{body_name}_joint{i*'_'}")
-            f_origin = self.C.addFrame(f'{name}_origin')
+            joint_name = joint.attrib.get("name", f"{body_name}_joint{i*'_'}")
+            f_origin = self.C.addFrame(f'{joint_name}_origin')
             f_origin.setParent(f_body)
             self.setRelativePose(f_origin, joint.attrib)
             f_origin.unLink()
@@ -193,7 +195,9 @@ class MujocoLoader():
             if not limits:
                 limits = "-1 1"
 
-            f_joint = self.C.addFrame(name)
+            # if self.C.getFrame(joint_name, False):
+            #     joint_name = f'{joint_name}_{self.bodyCount}'
+            f_joint = self.C.addFrame(joint_name)
             f_joint.setParent(f_origin)
             f_joint.setJoint(axis, floats(limits))
             
@@ -203,7 +207,8 @@ class MujocoLoader():
             f_body.setParent(f_parent, True)
 
         for i, geom in enumerate(body.findall("./geom")):
-            if self.visualsOnly and geom.attrib.get('contype', '')!='0':
+            isColl = geom.attrib.get('contype', '')!='0' or 'coll' in geom.attrib.get('class','')
+            if self.visualsOnly and isColl:
                 continue
 
             f_shape = self.C.addFrame(f'{body_name}_shape{i}')
@@ -236,21 +241,23 @@ class MujocoLoader():
                 if geom.attrib['type']=='capsule':
                     if len(size)==2:
                         f_shape.setShape(ry.ST.capsule, [2.*size[1], size[0]])
-                if geom.attrib['type']=='cylinder':
+
+                elif geom.attrib['type']=='cylinder':
                     if len(size)==2:
                         f_shape.setShape(ry.ST.cylinder, [2.*size[1], size[0]])
-                if geom.attrib['type']=='box':
+
+                elif geom.attrib['type']=='box':
                     assert len(size)==3
                     f_shape.setShape(ry.ST.box, [2.*f for f in size])
                     if geom.attrib.get("material", None):
                         texture_path = self.materials[geom.attrib.get("material", None)]
-                                             
                         if len(texture_path.split()) == 4:  # Is a color rgba
                             f_shape.setColor(floats(texture_path))
                         else:
-                            f_shape.setTextureFile(self.materials[geom.attrib.get("material", None)], np.random.rand(8,2))
+                            print('applying to box:', texture_path)
+                            f_shape.setTextureFile(texture_path, np.random.rand(8,2))
 
-                if geom.attrib['type']=='sphere':
+                elif geom.attrib['type']=='sphere':
                     if len(size)==1:
                         f_shape.setShape(ry.ST.sphere, size)
                 
@@ -260,7 +267,7 @@ class MujocoLoader():
                 if geom.attrib.get("material", None) is None:
                     f_shape.setColor(floats(geom.attrib['rgba']))
 
-            elif geom.attrib.get('class', None) and 'col' in geom.attrib['class']:
+            elif isColl:
                 f_shape.setColor([1,0,0,.2])
                 
         return f_body
