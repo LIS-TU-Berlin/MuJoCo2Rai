@@ -23,18 +23,20 @@ def test_fixtures():
 def test_kitchen_franka():
     pysite = sysconfig.get_paths()["purelib"]
     # file = pysite+"/gymnasium_robotics/envs/assets/kitchen_franka/kitchen_assets/kitchen_env_model.xml"
-    # file = '../kitchen_dataset/RUSTIC_ONE_WALL_SMALL.xml'
-    file = '../kitchen_dataset/FARMHOUSE_U_SHAPED_LARGE.xml'
+    file = '../kitchen_dataset/RUSTIC_ONE_WALL_SMALL.xml'
+    # file = '../kitchen_dataset/FARMHOUSE_U_SHAPED_LARGE.xml'
+    # file = '/home/mtoussai/.local/venv/lib/python3.12/site-packages/gymnasium/envs/mujoco/assets/inverted_pendulum.xml'
 
     print('=====================', file)
-    M = MujocoLoader(file, visualsOnly=True, processMeshes=True)
+    M = MujocoLoader(file, visualsOnly=True, processMeshes=False)
     M.base.setQuaternion([0,0,0,1])
-    M.base.setPosition([1,0,0])
-    ry.params_print()
+    M.base.setPosition([0,0,.1])
+    # ry.params_print()
     print('loaded #frames: ', M.C.getFrameDimension())
-    # os.system('rm -Rf meshes/')
-    # M.C.writeMeshes('meshes/')
-    M.C.simplify(True, False, True)
+    os.system('rm -Rf meshes/')
+    M.C.processStructure(True, False, False)
+    M.C.processInertias(True)
+    M.C.writeMeshes('meshes/', copyTextures=True)
     print('simplified #frames: ', M.C.getFrameDimension())
     with open("z.g", "w") as fil:
         #yaml.dump(M.C.asDict(), file, default_flow_style=False)

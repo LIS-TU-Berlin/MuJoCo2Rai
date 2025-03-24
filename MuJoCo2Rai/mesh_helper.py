@@ -193,14 +193,14 @@ class MeshHelper():
                 fil.create_dataset('mesh/colors', data=colors, dtype='uint8')
 
             if hasattr(self.mesh.visual, 'uv'):
+                texCoords = self.mesh.visual.uv
+                fil.create_dataset('mesh/textureCoords', data=texCoords, dtype='float32')
                 if hasattr(self.mesh.visual.material, 'baseColorTexture'):
                     img = self.mesh.visual.material.baseColorTexture
                 else:
                     img = self.mesh.visual.material.image
                 if img is not None:
-                    texCoords = self.mesh.visual.uv
                     texImg = 255.*np.asanyarray(img.convert("RGB"))
-                    fil.create_dataset('mesh/textureCoords', data=texCoords, dtype='float32')
                     fil.create_dataset('mesh/textureImg', data=texImg, dtype='uint8')
 
             if hasattr(self, 'pts') and self.pts.shape[1]==3:

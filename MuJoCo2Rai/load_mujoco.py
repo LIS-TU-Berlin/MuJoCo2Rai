@@ -44,7 +44,7 @@ def print_xml(file):
     path, _ = os.path.split(file)
     return print_xml_node(tree.getroot(), path, 0)
 
-## --- same with building the condig:
+## --- same with building the config:
 
 # TODO process_mesh not in right position yet, bc texture files get assigned through materials for the first time in <body> tag
 # def process_mesh(name: str, meshfile: str, texturefile: str, out_path: str, scaling: float = 1.0):
@@ -97,7 +97,7 @@ class MujocoLoader():
 
         self.C = ry.Config()
         self.base = self.C.addFrame('base')
-        self.base.addAttributes({'muldibody':True})
+        self.base.addAttributes({'multibody':True})
         self.add_node(root, self.base, path, 0)
 
     def load_assets(self, root, path):
@@ -221,7 +221,7 @@ class MujocoLoader():
                 meshfile = self.meshes[mesh]['file']
                 scale = floats(self.meshes[mesh].get('scale', '1 1 1'))
 
-                if self.processMeshes or texture_path:
+                if self.processMeshes:
                     M = MeshHelper(meshfile)
                     if texture_path and len(texture_path.split()) != 4:
                         M.apply_texture(texture_path)
@@ -229,17 +229,27 @@ class MujocoLoader():
                     M.repair()
                     meshfile = meshfile[:-4]+".h5"
                     M.export_h5(meshfile)
-                    # print(f"Assigned texture {texture_path} to {mesh}")
 
                 f_shape.setMeshFile(meshfile, scale[0])
-
-                if texture_path and len(texture_path.split()) == 4:  # Is a color rgba
-                    f_shape.setColor(floats(texture_path))                        
+                
+                if texture_path:
+                    if len(texture_path.split()) == 4:  # Is a color rgba
+                        f_shape.setColor(floats(texture_path))
+                    # elif self.processMeshes and hasattr(M.mesh.visual, 'uv'):
+                    #     f_shape.setTextureFile(texture_path, M.mesh.visual.uv)
 
             elif 'type' in geom.attrib:
                 size = floats(geom.attrib['size'])
                 if geom.attrib['type']=='capsule':
-                    if len(size)==2:
+                    if 'fromto' in geom.attrib:
+                        fromto = floats(geom.attrib['fromto'])
+                        a, b = np.array(fromto[:3]), np.array(fromto[3:])
+                        l = np.linalg.norm(b-a)
+                        q = ry.Quaternion().setDiff([0,0,1],(b-a)/l)
+                        f_shape.setRelativePosition(0.5*(a+b))
+                        f_shape.setRelativeQuaternion(q.getArr())
+                        f_shape.setShape(ry.ST.capsule, [l, size[0]])
+                    elif len(size)==2:
                         f_shape.setShape(ry.ST.capsule, [2.*size[1], size[0]])
 
                 elif geom.attrib['type']=='cylinder':
